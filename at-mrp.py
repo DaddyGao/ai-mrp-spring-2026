@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # ==========================================
-# 1. Model Definition (Unchanged)
+# 1. Model Definition
 # ==========================================
 class Net(nn.Module):
     def __init__(self):
@@ -36,7 +36,7 @@ class Net(nn.Module):
         return F.log_softmax(x, dim=1)
 
 # ==========================================
-# 2. Attack Algorithms (Unchanged)
+# 2. Attack Algorithms
 # ==========================================
 def fgsm_attack(image, epsilon, data_grad):
     sign_data_grad = data_grad.sign()
@@ -58,31 +58,12 @@ def pgd_attack(model, image, label, epsilon, alpha, iters):
         perturbed_image = torch.clamp(original_image + eta, min=0, max=1).detach()
     return perturbed_image
 
-def mifgsm_attack(model, image, label, epsilon, alpha, iters, decay=1.0):
-    original_image = image.clone().detach()
-    perturbed_image = image.clone().detach()
-    momentum = torch.zeros_like(image).detach()
-    for _ in range(iters):
-        perturbed_image.requires_grad = True
-        output = model(perturbed_image)
-        loss = F.nll_loss(output, label)
-        model.zero_grad()
-        loss.backward()
-        grad = perturbed_image.grad.data
-        grad_norm = torch.norm(grad, p=1)
-        grad = grad / (grad_norm + 1e-8)
-        momentum = decay * momentum + grad
-        perturbed_image = perturbed_image.detach() + alpha * momentum.sign()
-        eta = torch.clamp(perturbed_image - original_image, min=-epsilon, max=epsilon)
-        perturbed_image = torch.clamp(original_image + eta, min=0, max=1).detach()
-    return perturbed_image
-
 # ==========================================
-# 3. Training Loops (Standard & Adversarial)
+# 3. Training Loops with Progress Tracking
 # ==========================================
 def train(model, device, train_loader, optimizer, epochs=3):
     model.train()
-    print("--- Starting Standard Training ---")
+    print("\n--- Starting Standard Training ---")
     for epoch in range(1, epochs + 1):
         for batch_idx, (data, target) in enumerate(train_loader):
             data, target = data.to(device), target.to(device)
@@ -91,15 +72,17 @@ def train(model, device, train_loader, optimizer, epochs=3):
             loss = F.nll_loss(output, target)
             loss.backward()
             optimizer.step()
+            
+            if batch_idx % 200 == 0:
+                print(f"Train Epoch: {epoch} [{batch_idx * len(data)}/{len(train_loader.dataset)}] \tLoss: {loss.item():.6f}")
 
-def adversarial_train(model, device, train_loader, optimizer, epsilon, epochs=3):
+def fgsm_adversarial_train(model, device, train_loader, optimizer, epsilon, epochs=3):
     model.train()
-    print("\n--- Starting Adversarial Training (FGSM) ---")
+    print("\n--- Starting FGSM Adversarial Training ---")
     for epoch in range(1, epochs + 1):
         for batch_idx, (data, target) in enumerate(train_loader):
             data, target = data.to(device), target.to(device)
             
-            # Generate Adversarial Examples on the fly
             data.requires_grad = True
             output = model(data)
             loss = F.nll_loss(output, target)
@@ -108,78 +91,54 @@ def adversarial_train(model, device, train_loader, optimizer, epsilon, epochs=3)
             data_grad = data.grad.data
             adv_data = fgsm_attack(data, epsilon, data_grad)
             
-            # Train on adversarial examples
             optimizer.zero_grad()
             output_adv = model(adv_data)
             loss_adv = F.nll_loss(output_adv, target)
             loss_adv.backward()
             optimizer.step()
+            
+            if batch_idx % 200 == 0:
+                print(f"FGSM AT Epoch: {epoch} [{batch_idx * len(data)}/{len(train_loader.dataset)}] \tLoss: {loss_adv.item():.6f}")
+
+def pgd_adversarial_train(model, device, train_loader, optimizer, epsilon, epochs=3):
+    model.train()
+    print("\n--- Starting PGD Adversarial Training (Madry's Defense) ---")
+    for epoch in range(1, epochs + 1):
+        for batch_idx, (data, target) in enumerate(train_loader):
+            data, target = data.to(device), target.to(device)
+            
+            # Use fewer iterations (e.g., 7) during training to save time
+            adv_data = pgd_attack(model, data, target, epsilon, alpha=0.01, iters=7)
+            
+            optimizer.zero_grad()
+            output_adv = model(adv_data)
+            loss_adv = F.nll_loss(output_adv, target)
+            loss_adv.backward()
+            optimizer.step()
+            
+            if batch_idx % 200 == 0:
+                print(f"PGD AT Epoch: {epoch} [{batch_idx * len(data)}/{len(train_loader.dataset)}] \tLoss: {loss_adv.item():.6f}")
 
 # ==========================================
-# 4. Visualization
+# 4. Comprehensive Evaluation
 # ==========================================
-def generate_visual_evidence(model, device, test_loader, epsilon):
-    model.eval()
-    data, target = next(iter(test_loader))
-    data, target = data.to(device), target.to(device)
-    
-    # Get one correct prediction to visualize
-    output = model(data)
-    init_pred = output.max(1, keepdim=True)[1]
-    
-    # Pick the first image
-    img = data[0:1]
-    lbl = target[0:1]
-    orig_pred = init_pred[0].item()
-    
-    img.requires_grad = True
-    out = model(img)
-    loss = F.nll_loss(out, lbl)
-    model.zero_grad()
-    loss.backward()
-    
-    adv_img = fgsm_attack(img, epsilon, img.grad.data)
-    new_pred = model(adv_img).max(1, keepdim=True)[1].item()
-    perturbation = adv_img - img
-    
-    # Plotting
-    img_np = img.squeeze().detach().cpu().numpy()
-    adv_np = adv_img.squeeze().detach().cpu().numpy()
-    pert_np = perturbation.squeeze().detach().cpu().numpy()
-    
-    fig, ax = plt.subplots(1, 3, figsize=(10, 3))
-    ax[0].imshow(img_np, cmap="gray")
-    ax[0].set_title(f"Original\nPred: {orig_pred}")
-    ax[0].axis('off')
-    
-    ax[1].imshow(pert_np, cmap="gray")
-    ax[1].set_title("Perturbation")
-    ax[1].axis('off')
-    
-    ax[2].imshow(adv_np, cmap="gray")
-    ax[2].set_title(f"Adversarial\nPred: {new_pred}")
-    ax[2].axis('off')
-    
-    plt.tight_layout()
-    plt.savefig("adversarial_evidence.png")
-    print("\n-> Saved visual evidence to 'adversarial_evidence.png' (Use this in Slide 6)")
-
-# ==========================================
-# 5. Evaluation & Defenses
-# ==========================================
-def test_attacks_and_defenses(model, device, test_loader, epsilon):
+def evaluate_model(model, model_name, device, test_loader, epsilon):
     model.eval()
     correct_clean = 0
     total_samples = 0
     
-    # Trackers
+    fgsm_success = 0
+    fgsm_blur_success = 0
     pgd_success = 0
     pgd_blur_success = 0
+    
+    print(f"\n--- Evaluating {model_name} ---")
     
     for data, target in test_loader:
         data, target = data.to(device), target.to(device)
         total_samples += len(data)
         
+        # Clean Eval
         output = model(data)
         init_pred = output.max(1, keepdim=True)[1] 
         correct_mask = (init_pred.flatten() == target).flatten()
@@ -191,26 +150,45 @@ def test_attacks_and_defenses(model, device, test_loader, epsilon):
         data_c = data[correct_mask]
         target_c = target[correct_mask]
         
-        # Attack with PGD
+        # --- FGSM Attack ---
+        data_c.requires_grad = True
+        out_c = model(data_c)
+        loss = F.nll_loss(out_c, target_c)
+        model.zero_grad()
+        loss.backward()
+        data_grad = data_c.grad.data
+        
+        adv_fgsm = fgsm_attack(data_c, epsilon, data_grad)
+        pred_fgsm = model(adv_fgsm).max(1, keepdim=True)[1].flatten()
+        fgsm_success += (pred_fgsm != target_c).sum().item()
+        
+        blurred_fgsm = TF.gaussian_blur(adv_fgsm, kernel_size=[3, 3], sigma=[1.0, 1.0])
+        pred_blur_fgsm = model(blurred_fgsm).max(1, keepdim=True)[1].flatten()
+        fgsm_blur_success += (pred_blur_fgsm != target_c).sum().item()
+        
+        # --- PGD Attack ---
         adv_pgd = pgd_attack(model, data_c, target_c, epsilon, alpha=0.01, iters=40)
         pred_pgd = model(adv_pgd).max(1, keepdim=True)[1].flatten()
         pgd_success += (pred_pgd != target_c).sum().item()
         
-        # Apply Easy Defense (Gaussian Blur) to the adversarial images
-        blurred_adv_pgd = TF.gaussian_blur(adv_pgd, kernel_size=[3, 3], sigma=[1.0, 1.0])
-        pred_blur_pgd = model(blurred_adv_pgd).max(1, keepdim=True)[1].flatten()
+        blurred_pgd = TF.gaussian_blur(adv_pgd, kernel_size=[3, 3], sigma=[1.0, 1.0])
+        pred_blur_pgd = model(blurred_pgd).max(1, keepdim=True)[1].flatten()
         pgd_blur_success += (pred_blur_pgd != target_c).sum().item()
 
     clean_acc = correct_clean / total_samples
+    asr_fgsm = fgsm_success / correct_clean
+    asr_blur_fgsm = fgsm_blur_success / correct_clean
     asr_pgd = pgd_success / correct_clean
-    asr_blur = pgd_blur_success / correct_clean
+    asr_blur_pgd = pgd_blur_success / correct_clean
     
     print(f"Clean Accuracy: {clean_acc*100:.2f}%")
+    print(f"Standard FGSM ASR: {asr_fgsm*100:.2f}%")
+    print(f"FGSM ASR (with Easy Defense - Blur): {asr_blur_fgsm*100:.2f}%")
     print(f"Standard PGD ASR: {asr_pgd*100:.2f}%")
-    print(f"PGD ASR (with Easy Defense - Blur): {asr_blur*100:.2f}%")
+    print(f"PGD ASR (with Easy Defense - Blur): {asr_blur_pgd*100:.2f}%")
 
 # ==========================================
-# 6. Main Execution
+# 5. Main Execution
 # ==========================================
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -222,22 +200,21 @@ if __name__ == '__main__':
     train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
     
-    # 1. Train Standard Model
+    # 1. Standard Model
     std_model = Net().to(device)
     optimizer_std = optim.Adam(std_model.parameters(), lr=1e-3)
     train(std_model, device, train_loader, optimizer_std, epochs=3)
+    evaluate_model(std_model, "Standard Model", device, test_loader, epsilon=0.3)
     
-    # Generate Visuals for the slides
-    generate_visual_evidence(std_model, device, test_loader, epsilon=0.3)
+    # 2. FGSM Adversarially Trained Model
+    fgsm_model = Net().to(device)
+    optimizer_fgsm = optim.Adam(fgsm_model.parameters(), lr=1e-3)
+    fgsm_adversarial_train(fgsm_model, device, train_loader, optimizer_fgsm, epsilon=0.3, epochs=3)
+    evaluate_model(fgsm_model, "FGSM-Trained Model", device, test_loader, epsilon=0.3)
+
+    # 3. PGD Adversarially Trained Model (Madry's Defense)
+    pgd_model = Net().to(device)
+    optimizer_pgd = optim.Adam(pgd_model.parameters(), lr=1e-3)
+    pgd_adversarial_train(pgd_model, device, train_loader, optimizer_pgd, epsilon=0.3, epochs=3)
+    evaluate_model(pgd_model, "PGD-Trained Model", device, test_loader, epsilon=0.3)
     
-    print("\n--- Evaluating Standard Model ---")
-    test_attacks_and_defenses(std_model, device, test_loader, epsilon=0.3)
-    
-    # 2. Train Robust Model (Adversarial Training)
-    robust_model = Net().to(device)
-    optimizer_rob = optim.Adam(robust_model.parameters(), lr=1e-3)
-    adversarial_train(robust_model, device, train_loader, optimizer_rob, epsilon=0.3, epochs=3)
-    
-    print("\n--- Evaluating Adversarially Trained Model ---")
-    # We test without the blur defense here to show the model's inherent robustness
-    test_attacks_and_defenses(robust_model, device, test_loader, epsilon=0.3)
