@@ -101,14 +101,20 @@ def fgsm_adversarial_train(model, device, train_loader, optimizer, epsilon, epoc
                 print(f"FGSM AT Epoch: {epoch} [{batch_idx * len(data)}/{len(train_loader.dataset)}] \tLoss: {loss_adv.item():.6f}")
 
 def pgd_adversarial_train(model, device, train_loader, optimizer, epsilon, epochs=3):
-    model.train()
     print("\n--- Starting PGD Adversarial Training (Madry's Defense) ---")
     for epoch in range(1, epochs + 1):
         for batch_idx, (data, target) in enumerate(train_loader):
             data, target = data.to(device), target.to(device)
             
-            # Use fewer iterations (e.g., 7) during training to save time
-            adv_data = pgd_attack(model, data, target, epsilon, alpha=0.01, iters=7)
+            # FIX 1: Set to eval mode to get deterministic gradients for attack generation
+            model.eval() 
+            
+            # FIX 2: Increase alpha so 7 iterations can reach the 0.3 boundary
+            # 7 steps * 0.06 = 0.42 (safely covers the 0.3 epsilon ball)
+            adv_data = pgd_attack(model, data, target, epsilon, alpha=0.06, iters=7)
+            
+            # FIX 3: Switch back to train mode for the actual model weight update
+            model.train()
             
             optimizer.zero_grad()
             output_adv = model(adv_data)
@@ -217,4 +223,3 @@ if __name__ == '__main__':
     optimizer_pgd = optim.Adam(pgd_model.parameters(), lr=1e-3)
     pgd_adversarial_train(pgd_model, device, train_loader, optimizer_pgd, epsilon=0.3, epochs=3)
     evaluate_model(pgd_model, "PGD-Trained Model", device, test_loader, epsilon=0.3)
-    
