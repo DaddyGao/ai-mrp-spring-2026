@@ -20,7 +20,7 @@ The project evaluates standard CNNs trained on the MNIST dataset against mathema
 3. **Models Evaluated:**
    * **Standard Baseline Model:** Trained purely on clean data.
    * **FGSM-Trained Model:** Trained with single-step adversarial examples.
-   * **PGD-Trained Model (Madry's Defense):** Trained with strong, iterative adversarial examples.
+   * **PGD-Trained Model:** Trained with strong, iterative adversarial examples.
 
 ## Requirements & Setup
 Ensure you have Python 3.8+ installed. Install the required dependencies using pip:
