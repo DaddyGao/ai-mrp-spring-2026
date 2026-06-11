@@ -1,5 +1,8 @@
 # MRP: Breaking and Defending Convolutional Neural Networks
 
+## Demonstration of Built System
+https://youtu.be/g4Q2Y4O4NEw
+
 ## Overview
 This repository contains the code and presentation for a Mini Research Problem (MRP) exploring the vulnerability of Convolutional Neural Networks (CNNs) to white-box adversarial attacks, alongside an empirical evaluation of different defense mechanisms. 
 
